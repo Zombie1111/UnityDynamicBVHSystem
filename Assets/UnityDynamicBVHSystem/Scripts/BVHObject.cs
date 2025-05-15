@@ -4,5 +4,5 @@ using UnityEngine;
 
 public class BVHObject : MonoBehaviour
 {
-    //Stores AABBs created from colliders
+    
 }

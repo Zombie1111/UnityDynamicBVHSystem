@@ -9,7 +9,7 @@ using UnityEngine.Rendering;
 using System.Runtime.CompilerServices;
 using Unity.Collections.LowLevel.Unsafe;
 
-public class BLASBuilder : MonoBehaviour
+public static class BLASBuilder
 {
     //Creates BVHObjects
     //A node in the BVH tree
@@ -18,48 +18,17 @@ public class BLASBuilder : MonoBehaviour
     {
         internal Vector3 min;
         internal Vector3 max;
-        internal int leftKidI;//Right kid is always leftKid + 1
-        internal int triStartI;
+        /// <summary>
+        /// (If triCount == 0 this is left kid index (Right kid index is always +1))
+        /// (If triCount > 0 this is index of the first triangle)
+        /// </summary>
+        internal int leftStartI;//Right kid is always leftKid + 1
         internal int triCount;
     }
 
-    [BurstCompile]
-    internal readonly struct Triangle
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]//Works on constructors?
-        internal Triangle(in Extended extendedTri)
-        {
-            v0 = extendedTri.v0;
-            v1 = extendedTri.v1;
-            v2 = extendedTri.v2;
-            matI = extendedTri.matID;
-        }
-
-        internal readonly Vector3 v0;
-        internal readonly Vector3 v1;
-        internal readonly Vector3 v2;
-        internal readonly short matI;//The index of the material this tri uses
-
-        internal readonly struct Extended
-        {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]//Works on constructors?
-            internal Extended(Vector3 ver0, Vector3 ver1, Vector3 ver2, short newMatI)
-            {
-                v0 = ver0;
-                v1 = ver1;
-                v2 = ver2;
-                center = (ver0 + ver1 + ver2) * 0.3333f;
-                matID = newMatI;
-            }
-
-            internal readonly Vector3 v0;
-            internal readonly Vector3 v1;
-            internal readonly Vector3 v2;
-            internal readonly Vector3 center;//Only needed durring building
-            internal readonly short matID;//The id of the material this tri uses
-        }
-    }
-
+    /// <summary>
+    /// Contains data required to build a BLASOObject
+    /// </summary>
     [BurstCompile]
     internal readonly unsafe struct ObjectData
     {
@@ -181,12 +150,15 @@ public class BLASBuilder : MonoBehaviour
         Invalid = 100,
     }
 
+    /// <summary>
+    /// A BLASObject is a local BVH
+    /// </summary>
     [BurstCompile]
     internal readonly struct BLASObject
     {
         internal readonly NativeArray<Node> nodes;
         internal readonly NativeArray<Triangle> tris;
-
+        
         internal unsafe BLASObject(in ObjectData od)
         {
             if (od.type != ShapeType.ConcaveMesh)
@@ -238,8 +210,7 @@ public class BLASBuilder : MonoBehaviour
             int nodesUsed = 1;
             Node rootNode = nodes[rootNodeI];
 
-            rootNode.leftKidI = 0;
-            rootNode.triStartI = 0;
+            rootNode.leftStartI = 0;
             rootNode.triCount = triCount;
 
             Subdivide(ref rootNode, rootNodeI);
@@ -249,7 +220,7 @@ public class BLASBuilder : MonoBehaviour
                 node.min = new Vector3(1e30f, 1e30f, 1e30f);
                 node.max = new Vector3(-1e30f, -1e30f, -1e30f);
 
-                for (int first = node.triStartI, ii = 0; ii < node.triCount; ii++)
+                for (int first = node.leftStartI, ii = 0; ii < node.triCount; ii++)
                 {
                     Triangle.Extended tri = eTris[first + ii];
 
@@ -276,7 +247,7 @@ public class BLASBuilder : MonoBehaviour
                 float splitPos = node.min[axis] + extent[axis] * 0.5f;
 
                 //Split triangles
-                int i = node.triStartI;
+                int i = node.leftStartI;
                 int j = i + node.triCount - 1;
 
                 while (i <= j)
@@ -293,7 +264,7 @@ public class BLASBuilder : MonoBehaviour
                 }
 
                 //Want more kids?
-                int leftCount = i - node.triStartI;
+                int leftCount = i - node.leftStartI;
                 if (leftCount == 0 || leftCount == node.triCount)
                 {
                     nodes[nodeI] = node;
@@ -306,12 +277,12 @@ public class BLASBuilder : MonoBehaviour
 
                 Node leftKid = nodes[leftKidI];
                 Node rightKid = nodes[rightKidI];
-                leftKid.triStartI = node.triStartI;
+                leftKid.leftStartI = node.leftStartI;
                 leftKid.triCount = leftCount;
-                rightKid.triStartI = i;
+                rightKid.leftStartI = i;
                 rightKid.triCount = node.triCount - leftCount;
 
-                node.leftKidI = leftKidI;
+                node.leftStartI = leftKidI;
                 node.triCount = 0;
                 nodes[nodeI] = node;
 
@@ -325,5 +296,146 @@ public class BLASBuilder : MonoBehaviour
                 tris[i] = new(eTris[i]);
             }
         }
+    }
+
+    internal unsafe struct BLASInstance
+    {
+        #region BLASInstance data
+
+        internal BLASInstance(in BLASObject blasO, in Matrix4x4 wToL, in Matrix4x4 lToW)
+        {
+            nodesPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.nodes);
+            nodesLenght = blasO.nodes.Length;
+            trisPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.tris);
+            trisLenght = blasO.tris.Length;
+
+            this.wToL = wToL;
+
+            Node node = blasO.nodes[0];
+            min = lToW.MultiplyPoint3x4(node.min);
+            max = lToW.MultiplyPoint3x4(node.max);
+        }
+
+        private void* nodesPTR;
+        private int nodesLenght;
+        private void* trisPTR;
+        private int trisLenght;
+
+        private Matrix4x4 wToL;
+        /// <summary>
+        /// min pos of AABB containing all nodes in worldspace
+        /// </summary>
+        internal Vector3 min;
+        /// <summary>
+        /// max pos of AABB containing all nodes in worldspace
+        /// </summary>
+        internal Vector3 max;
+
+        internal void SetBLASObject(in BLASObject blasO)
+        {
+            nodesPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.nodes);
+            nodesLenght = blasO.nodes.Length;
+            trisPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.tris);
+            trisLenght = blasO.tris.Length;
+        }
+
+        internal void SetMatrix(in Matrix4x4 wToL, in Matrix4x4 lToW)
+        {
+            this.wToL = wToL;
+
+            Node node = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<Node>(
+                nodesPTR, nodesLenght, Allocator.None)[0];
+
+            min = lToW.MultiplyPoint3x4(node.min);
+            max = lToW.MultiplyPoint3x4(node.max);
+        }
+
+        #endregion BLASInstance data
+
+        #region BLASInstance raycast
+
+        internal bool Raycast(in Ray ray, out Hit hit)
+        {
+            Vector3 dirL = wToL.MultiplyVector(ray.direction);
+            float disScale = dirL.magnitude;
+            dirL.Normalize();//Is a normalized vector required?
+
+            Vector3 orginL = wToL.MultiplyPoint3x4(ray.orgin);
+            float hitDisL = float.MaxValue;
+            int hitTriI = -1;
+
+            NativeArray<Node> nodes = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<Node>(
+                nodesPTR, nodesLenght, Allocator.None);
+            NativeArray<Triangle> tris = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<Triangle>(
+                nodesPTR, nodesLenght, Allocator.None);
+
+            IntersectBVH(0);
+
+            //Get result
+            if (hitTriI < 0)
+            {
+                hit = new();
+                return false;
+            }
+
+            hitDisL /= disScale;//Makes it worldspace
+            hit = new(tris[hitTriI], ray.orgin + (ray.direction * hitDisL), hitDisL);
+            return true;
+
+            void IntersectBVH(int nodeI)
+            {
+                Node node = nodes[nodeI];
+                if (IntersectAABB(in node.min, in node.max) == false) return;
+                if (node.triCount > 0)
+                {
+                    for (int i = 0; i < node.triCount; i++)
+                    {
+                        IntersectTri(i);
+                    }
+                }
+                else
+                {
+                    IntersectBVH(node.leftStartI);
+                    IntersectBVH(node.leftStartI + 1);
+                }
+            }
+
+            bool IntersectAABB(in Vector3 min, in Vector3 max)
+{
+                float tx1 = (min.x - orginL.x) / dirL.x, tx2 = (max.x - orginL.x) / dirL.x;
+                float tmin = Math.Min(tx1, tx2), tmax = Math.Max(tx1, tx2);
+                float ty1 = (min.y - orginL.y) / dirL.y, ty2 = (max.y - orginL.y) / dirL.y;
+                tmin = Math.Max(tmin, Math.Min(ty1, ty2)); tmax = Math.Min(tmax, Math.Max(ty1, ty2));
+                float tz1 = (min.z - orginL.z) / dirL.z, tz2 = (max.z - orginL.z) / dirL.z;
+                tmin = Math.Max(tmin, Math.Min(tz1, tz2)); tmax = Math.Min(tmax, Math.Max(tz1, tz2));
+                return tmax >= tmin && tmin < hitDisL     && tmax > 0;
+            }
+
+            void IntersectTri(int triI)
+            {
+                Triangle tri = tris[triI];
+
+                Vector3 edge1 = tri.v1 - tri.v0;
+                Vector3 edge2 = tri.v2 - tri.v0;
+                Vector3 h = Vector3.Cross(dirL, edge2);
+                float a = Vector3.Dot(edge1, h);
+                if (a > -0.0001f && a < 0.0001f) return;//Ray parallel to triangle
+                float f = 1 / a;
+                Vector3 s = orginL - tri.v0;
+                float u = f * Vector3.Dot(s, h);
+                if (u < 0 || u > 1) return;
+                Vector3 q = Vector3.Cross(s, edge1);
+                float v = f * Vector3.Dot(dirL, q);
+                if (v < 0 || u + v > 1) return;
+                float t = f * Vector3.Dot(edge2, q);
+                if (t < 0.0001f || t > hitDisL) return;
+
+                //We hit the triangle
+                hitDisL = t;
+                hitTriI = triI;
+            }
+        }
+
+        #endregion BLASInstance raycast
     }
 }

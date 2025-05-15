@@ -3,12 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using Unity.Collections.LowLevel.Unsafe;
-using PlasticGui.Help.Actions;
 using Unity.Collections;
-using PlasticPipe.PlasticProtocol.Messages;
-using System.Linq;
-using UnityEngine.AI;
 
 public class BVHSystem : MonoBehaviour
 {
