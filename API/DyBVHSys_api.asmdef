@@ -1,0 +1,16 @@
+{
+    "name": "DyBVHSys_api",
+    "rootNamespace": "",
+    "references": [
+        "GUID:e9ab9194090eb1f4c9dbe8bf4e505139"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
