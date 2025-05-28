@@ -22,17 +22,17 @@ public static class BLASBuilder
         /// (If triCount == 0 this is left kid index (Right kid index is always +1))
         /// (If triCount > 0 this is index of the first triangle)
         /// </summary>
-        internal int leftStartI;//Right kid is always leftKid + 1
+        internal int leftStartI;
         internal int triCount;
     }
 
     /// <summary>
-    /// Contains data required to build a BLASOObject
+    /// Contains data required to build a BLASOObject from a Collider or MeshFilter.
     /// </summary>
     [BurstCompile]
-    internal readonly unsafe struct ObjectData
+    internal readonly unsafe struct GameObjectData
     {
-        internal ObjectData(Collider col, MeshFilter mf)
+        internal GameObjectData(Collider col, MeshFilter mf)
         {
             subMeshMatI = new();
             void* subMeshMatI_ptr = UnsafeUtility.AddressOf(ref subMeshMatI);
@@ -258,40 +258,40 @@ public static class BLASBuilder
             }
         }
 
-        internal static unsafe BLASObject CreateFrom(in ObjectData od)
+        internal static unsafe BLASObject CreateFrom(in GameObjectData god)
         {
-            if (od.type != ShapeType.ConcaveMesh)
+            if (god.type != ShapeType.ConcaveMesh)
             {
-                throw new Exception(od.type + " not implemented!");
+                throw new Exception(god.type + " not implemented!");
             }
 
             //Get mesh data and allocate native arrays
-            int subMeshCount = od.meshData.subMeshCount;
+            int subMeshCount = god.meshData.subMeshCount;
             int maxIndicesCount = 0;
 
             for (int i = 0; i < subMeshCount; i++)
             {
-                SubMeshDescriptor subMD = od.meshData.GetSubMesh(i);
+                SubMeshDescriptor subMD = god.meshData.GetSubMesh(i);
                 maxIndicesCount = Math.Max(maxIndicesCount, subMD.indexCount);
             }
 
-            int triCount = od.meshData.vertexCount / 3;
+            int triCount = god.meshData.vertexCount / 3;
             int triI = 0;
             NativeArray<int> indices = new(maxIndicesCount, Allocator.Temp);
             NativeArray<Vector3> vertics = new(triCount * 3, Allocator.Temp);
             NativeArray<Triangle.Extended> eTris = new(triCount, Allocator.Temp);
-            od.meshData.GetVertices(vertics);
+            god.meshData.GetVertices(vertics);
 
             //Get triangles per submesh
-            fixed (FixedBytes16* subMeshMatI_ptr = &od.subMeshMatI)
+            fixed (FixedBytes16* subMeshMatI_ptr = &god.subMeshMatI)
             {
                 short* subMeshMatI_shorts = (short*)subMeshMatI_ptr;
 
                 for (int i = 0; i < subMeshCount; i++)
                 {
-                    SubMeshDescriptor subMD = od.meshData.GetSubMesh(i);
+                    SubMeshDescriptor subMD = god.meshData.GetSubMesh(i);
                     int subIndiceCount = subMD.indexCount;
-                    od.meshData.GetIndices(indices, i, true);
+                    god.meshData.GetIndices(indices, i, true);
 
                     for (int subIndiceI = 0; subIndiceI < subIndiceCount; subIndiceI += 3)
                     {
@@ -311,7 +311,7 @@ public static class BLASBuilder
     {
         #region BLASInstance data
 
-        internal BLASInstance(in BLASObject blasO, in Matrix4x4 wToL, in Matrix4x4 lToW)
+        internal BLASInstance(in BLASObject blasO, ref Matrix4x4 wToL, ref Matrix4x4 lToW)
         {
             nodesPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.nodes);
             nodesLenght = blasO.nodes.Length;
@@ -321,8 +321,11 @@ public static class BLASBuilder
             this.wToL = wToL;
 
             Node node = blasO.nodes[0];
-            min = lToW.MultiplyPoint3x4(node.min);
+            Vector3 newMin = lToW.MultiplyPoint3x4(node.min);
             max = lToW.MultiplyPoint3x4(node.max);
+            min = newMin;
+            min = HelpMethods.Min(min, max);
+            max = HelpMethods.Max(max, newMin);
         }
 
         private void* nodesPTR;
@@ -348,15 +351,18 @@ public static class BLASBuilder
             trisLenght = blasO.tris.Length;
         }
 
-        internal void SetMatrix(in Matrix4x4 wToL, in Matrix4x4 lToW)
+        internal void SetMatrix(ref Matrix4x4 wToL, ref Matrix4x4 lToW)
         {
             this.wToL = wToL;
 
             Node node = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<Node>(
-                nodesPTR, nodesLenght, Allocator.None)[0];
+                nodesPTR, nodesLenght, Allocator.None)[0];//Could use raw pointer
 
-            min = lToW.MultiplyPoint3x4(node.min);
+            Vector3 newMin = lToW.MultiplyPoint3x4(node.min);
             max = lToW.MultiplyPoint3x4(node.max);
+            min = newMin;
+            min = HelpMethods.Min(min, max);
+            max = HelpMethods.Max(max, newMin);
         }
 
         #endregion BLASInstance data

@@ -2,7 +2,6 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-using BLASObject = BLASBuilder.BLASObject;
 using BLASInstance = BLASBuilder.BLASInstance;
 using Unity.Collections;
 
@@ -28,23 +27,24 @@ public static class TLASBuilder
 
     public readonly struct TLASScene
     {
-        internal readonly NativeArray<BLASObject> blasObjects;
         internal readonly NativeArray<BLASInstance> blasInstances;
         internal readonly NativeArray<short> blasInstanceLocks;
         internal readonly NativeArray<Node> nodes;
 
         /// <summary>
-        /// Input nativeArray MUST be Allocator.Persistent and never disposed outside this.Dispose()
+        /// Input nativeArrays MUST be Allocator.Persistent and never disposed outside this.Dispose()
         /// </summary>
-        internal TLASScene(NativeArray<BLASObject> blasObjects, NativeArray<BLASInstance> blasInstances)
+        internal TLASScene(NativeArray<BLASInstance> blasInstances, NativeArray<short> blasInstanceLocks)
         {
+            //Without refitting, we would simply need to lock blasInstances index while getting it from array. (Because the BLAS nodes will never change)
+            //With refitting we would need to lock the blasInstance durring the tracing. Because the nodex + tris may change.
+
             int blasInstanceCount = blasInstances.Length;
             int nodesUsed = 1;
             int nodeIndices = blasInstanceCount;
 
-            this.blasObjects = blasObjects;
             this.blasInstances = blasInstances;
-            blasInstanceLocks = new(blasInstanceCount, Allocator.Persistent);
+            this.blasInstanceLocks = blasInstanceLocks;
             NativeArray<Node> nodes = this.nodes = new(blasInstanceCount + 1, Allocator.Persistent);
             NativeArray<int> nodeIndexs = new(blasInstanceCount, Allocator.Temp);
 
@@ -55,7 +55,7 @@ public static class TLASBuilder
                 nodesUsed++;
             }
 
-            //##########Fixme compile error, I currently dont fully understand this logic, read more about it later
+            ////##########Fixme compile error, I currently dont fully understand this logic, read more about it later
             //int A = 0, B = FindBestMatch(nodeIndices, A);
             //while (nodeIndices > 1)
             //{
