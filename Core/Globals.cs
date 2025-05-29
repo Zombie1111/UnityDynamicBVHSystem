@@ -32,10 +32,10 @@ public readonly struct Triangle
     /// </summary>
     public readonly short matI;
 
-    internal readonly struct Extended
+    public readonly struct Extended
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]//Works on constructors?
-        internal Extended(Vector3 ver0, Vector3 ver1, Vector3 ver2, short newMatI)
+        public Extended(Vector3 ver0, Vector3 ver1, Vector3 ver2, short newMatI)
         {
             v0 = ver0;
             v1 = ver1;

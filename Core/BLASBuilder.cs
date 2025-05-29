@@ -3,10 +3,7 @@ using System.Collections.Generic;
 using Unity.Collections;
 using UnityEngine;
 using Unity.Burst;
-using static UnityEngine.Mesh;
 using System;
-using UnityEngine.Rendering;
-using System.Runtime.CompilerServices;
 using Unity.Collections.LowLevel.Unsafe;
 
 public static class BLASBuilder
@@ -27,140 +24,16 @@ public static class BLASBuilder
     }
 
     /// <summary>
-    /// Contains data required to build a BLASOObject from a Collider or MeshFilter.
-    /// </summary>
-    [BurstCompile]
-    internal readonly unsafe struct GameObjectData
-    {
-        internal GameObjectData(Collider col, MeshFilter mf)
-        {
-            subMeshMatI = new();
-            void* subMeshMatI_ptr = UnsafeUtility.AddressOf(ref subMeshMatI);
-            short* subMeshMatI_shorts = (short*)subMeshMatI_ptr;
-
-            if (mf != null)
-            {
-                offset = Vector3.zero;
-                scale = Vector3.one;
-                type = ShapeType.ConcaveMesh;
-                Mesh mesh = mf.sharedMesh;
-                meshData = Mesh.AcquireReadOnlyMeshData(mesh)[0];
-                if (SetSubMeshMatIndexs(mesh.subMeshCount) == false)
-                {
-                    type = ShapeType.Invalid;
-                    return;
-                }
-            }
-            else if (col is MeshCollider meshC)
-            {
-                offset = Vector3.zero;
-                scale = Vector3.one;
-                type = meshC.convex == true ? ShapeType.ConvexMesh : ShapeType.ConcaveMesh;
-                Mesh mesh = meshC.sharedMesh;
-                meshData = Mesh.AcquireReadOnlyMeshData(mesh)[0];
-                if (SetSubMeshMatIndexs(meshC.convex == true ? 1 : mesh.subMeshCount) == false)
-                {
-                    type = ShapeType.Invalid;
-                    return;
-                }
-            }
-            //else if (col is BoxCollider boxC)
-            //{
-            //    offset = boxC.center;
-            //    scale = boxC.size;
-            //    type = ShapeType.Box;
-            //    meshData = new();
-            //}
-            //else if (col is SphereCollider sphereC)
-            //{
-            //    center = sphereC.center;
-            //    shape = new Vector3(sphereC.radius, 0.0f, 0.0f);
-            //    type = ShapeType.Sphere;
-            //    meshData = new();
-            //}
-            //else if (col is CapsuleCollider capC)
-            //{
-            //    center = capC.center;
-            //    shape = new Vector3(capC.radius, capC.height, capC.direction);
-            //    type = ShapeType.Sphere;
-            //    meshData = new();
-            //}
-            else
-            {
-                Debug.LogError(col.GetType() + " is not supported by the BVH builder!");
-                offset = Vector3.zero; scale = Vector3.zero; type = ShapeType.Invalid; meshData = new();
-                return;
-            }
-
-            bool SetSubMeshMatIndexs(int subMeshCount)
-            {
-                Transform trans = col == null ? mf.transform: col.transform;
-
-                if (subMeshCount > _maxSubMeshes)
-                {
-                    Debug.LogError(trans.name + " had more than " + _maxSubMeshes + " submeshes! Either reduce subMesh count or increase _maxSubMeshes");
-                    return false;
-                }
-
-                for (int i = 0; i < subMeshCount; i++)
-                {
-                    subMeshMatI_shorts[i] = 0;//Fixme, get actuall material index
-                }
-
-                return true;
-            }
-        }
-
-        internal int GetId()
-        {
-            int id = 17;
-
-            unchecked
-            {
-                id *= 31 + (int)Math.Round(offset.x * 1000);
-                id *= 31 + (int)Math.Round(offset.y * 1000);
-                id *= 31 + (int)Math.Round(offset.z * 1000);
-                id *= 31 + (int)Math.Round(scale.x * 1000);
-                id *= 31 + (int)Math.Round(scale.y * 1000);
-                id *= 31 + (int)Math.Round(scale.z * 1000);
-                id *= 31 + (int)type;
-                if (type == ShapeType.ConcaveMesh || type == ShapeType.ConvexMesh) id *= 31 + meshData.vertexCount;
-            }
-
-            return id;
-        }
-
-        internal readonly Vector3 offset;
-        /// <summary>
-        /// (Sphere: X radius) (Capsule: X radius, Y height, Z direction)
-        /// </summary>
-        internal readonly Vector3 scale;
-        internal readonly ShapeType type;
-        internal readonly MeshData meshData;
-        internal readonly FixedBytes16 subMeshMatI; internal const int _maxSubMeshes = 8;
-    }
-
-    internal enum ShapeType
-    {
-        ConcaveMesh = 0,
-        ConvexMesh = 1,
-        box = 10,
-        Sphere = 11,
-        Capsule = 12,
-        Invalid = 100,
-    }
-
-    /// <summary>
     /// A BLASObject is a local BVH
     /// </summary>
     [BurstCompile]
-    internal readonly struct BLASObject
+    public readonly struct BLASObject
     {
         internal readonly NativeArray<Node> nodes;
         internal readonly NativeArray<Triangle> tris;
 
         #region BLASObject creation
-        private BLASObject(NativeArray<Triangle.Extended> eTris)
+        public BLASObject(NativeArray<Triangle.Extended> eTris)
         {
             int triCount = eTris.Length;
             NativeArray<Node> nodes = this.nodes = new(triCount * 2 - 1, Allocator.Persistent);
@@ -258,52 +131,6 @@ public static class BLASBuilder
             }
         }
 
-        internal static unsafe BLASObject CreateFrom(in GameObjectData god)
-        {
-            if (god.type != ShapeType.ConcaveMesh)
-            {
-                throw new Exception(god.type + " not implemented!");
-            }
-
-            //Get mesh data and allocate native arrays
-            int subMeshCount = god.meshData.subMeshCount;
-            int maxIndicesCount = 0;
-
-            for (int i = 0; i < subMeshCount; i++)
-            {
-                SubMeshDescriptor subMD = god.meshData.GetSubMesh(i);
-                maxIndicesCount = Math.Max(maxIndicesCount, subMD.indexCount);
-            }
-
-            int triCount = god.meshData.vertexCount / 3;
-            int triI = 0;
-            NativeArray<int> indices = new(maxIndicesCount, Allocator.Temp);
-            NativeArray<Vector3> vertics = new(triCount * 3, Allocator.Temp);
-            NativeArray<Triangle.Extended> eTris = new(triCount, Allocator.Temp);
-            god.meshData.GetVertices(vertics);
-
-            //Get triangles per submesh
-            fixed (FixedBytes16* subMeshMatI_ptr = &god.subMeshMatI)
-            {
-                short* subMeshMatI_shorts = (short*)subMeshMatI_ptr;
-
-                for (int i = 0; i < subMeshCount; i++)
-                {
-                    SubMeshDescriptor subMD = god.meshData.GetSubMesh(i);
-                    int subIndiceCount = subMD.indexCount;
-                    god.meshData.GetIndices(indices, i, true);
-
-                    for (int subIndiceI = 0; subIndiceI < subIndiceCount; subIndiceI += 3)
-                    {
-                        eTris[triI] = new(vertics[indices[subIndiceI]], vertics[indices[subIndiceI + 1]], vertics[indices[subIndiceI + 2]], subMeshMatI_shorts[i]);
-                        triI++;
-                    }
-                }
-            }
-
-            //Build BVH
-            return new(eTris);
-        }
         #endregion BLASObject creation
     }
 
@@ -329,7 +156,10 @@ public static class BLASBuilder
         }
 
         private void* nodesPTR;
-        private int nodesLenght;
+        /// <summary>
+        /// 0 if unused, negative if disabled
+        /// </summary>
+        internal int nodesLenght;
         private void* trisPTR;
         private int trisLenght;
 
@@ -423,7 +253,7 @@ public static class BLASBuilder
                 tmin = Math.Max(tmin, Math.Min(ty1, ty2)); tmax = Math.Min(tmax, Math.Max(ty1, ty2));
                 float tz1 = (min.z - orginL.z) / dirL.z, tz2 = (max.z - orginL.z) / dirL.z;
                 tmin = Math.Max(tmin, Math.Min(tz1, tz2)); tmax = Math.Min(tmax, Math.Max(tz1, tz2));
-                return tmax >= tmin && tmin < hitDisL     && tmax > 0;
+                return tmax >= tmin && tmin < hitDisL && tmax > 0;
             }
 
             void IntersectTri(int triI)
