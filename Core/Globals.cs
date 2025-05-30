@@ -40,7 +40,7 @@ public readonly struct Triangle
             v0 = ver0;
             v1 = ver1;
             v2 = ver2;
-            center = (ver0 + ver1 + ver2) * 0.3333f;
+            center = (ver0 + ver1 + ver2) / 3.0f;
             matID = newMatI;
         }
 
@@ -55,11 +55,18 @@ public readonly struct Triangle
 [BurstCompile]
 public readonly struct Hit
 {
-    internal Hit(Triangle tri, Vector3 pos, float dis)
+    internal Hit(in Triangle tri, Vector3 pos, float dis)
     {
         this.tri = tri;
         this.pos = pos;
         this.dis = dis;
+    }
+
+    internal Hit(in Ray ray)
+    {
+        this.tri = new();
+        this.pos = ray.orgin + (ray.direction * ray.maxDistance);
+        this.dis = ray.maxDistance;
     }
 
     public readonly Triangle tri;
@@ -67,16 +74,20 @@ public readonly struct Hit
     public readonly float dis;
 }
 
+
 [BurstCompile]
 public readonly struct Ray
 {
+    private const float defaultRayMaxDistance = 100.0f;
+
     /// <summary>
     /// Direction must always be normalized
     /// </summary>
-    public Ray(in Vector3 orgin, in Vector3 direction)
+    public Ray(in Vector3 orgin, in Vector3 direction, float maxDistance = defaultRayMaxDistance)
     {
         this.orgin = orgin;
         this.direction = direction;
+        this.maxDistance = maxDistance;
     }
 
     public readonly Vector3 orgin;
@@ -84,6 +95,8 @@ public readonly struct Ray
     /// Always normalized
     /// </summary>
     public readonly Vector3 direction;
+
+    public readonly float maxDistance;
 }
 
 

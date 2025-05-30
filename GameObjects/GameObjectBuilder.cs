@@ -29,6 +29,7 @@ public static class GameObjectBuilder
                 scale = Vector3.one;
                 type = ShapeType.ConcaveMesh;
                 Mesh mesh = mf.sharedMesh;
+
                 meshData = Mesh.AcquireReadOnlyMeshData(mesh)[0];
                 if (SetSubMeshMatIndexs(mesh.subMeshCount) == false)
                 {
@@ -41,7 +42,10 @@ public static class GameObjectBuilder
                 offset = Vector3.zero;
                 scale = Vector3.one;
                 type = meshC.convex == true ? ShapeType.ConvexMesh : ShapeType.ConcaveMesh;
+
                 Mesh mesh = meshC.sharedMesh;
+
+                Debug.Log(mesh.triangles.Length + " " + mesh.vertices.Length + " " + mesh.GetIndexCount(0));
                 meshData = Mesh.AcquireReadOnlyMeshData(mesh)[0];
                 if (SetSubMeshMatIndexs(meshC.convex == true ? 1 : mesh.subMeshCount) == false)
                 {
@@ -135,17 +139,28 @@ public static class GameObjectBuilder
         //Get mesh data and allocate native arrays
         int subMeshCount = god.meshData.subMeshCount;
         int maxIndicesCount = 0;
+        int totalIndicesCount = 0;
 
         for (int i = 0; i < subMeshCount; i++)
         {
             SubMeshDescriptor subMD = god.meshData.GetSubMesh(i);
+            if (subMD.topology != MeshTopology.Triangles) Debug.LogError("Mesh topology must be Triangles");
             maxIndicesCount = Math.Max(maxIndicesCount, subMD.indexCount);
+            totalIndicesCount += subMD.indexCount;
         }
 
-        int triCount = god.meshData.vertexCount / 3;
+        int verCount = god.meshData.vertexCount;
+        if (totalIndicesCount % 3 != 0)
+        {
+            //== 2 means its one less vertex so out of bounds is likely
+            if (totalIndicesCount % 3 == 2) Debug.LogError(god.meshData + " vertex count is not dividable with 3, may cause issues!");
+            else Debug.LogWarning(god.meshData + " vertex count is not dividable with 3, may cause issues!");
+        }
+
+        int triCount = totalIndicesCount / 3;
         int triI = 0;
         NativeArray<int> indices = new(maxIndicesCount, Allocator.Temp);
-        NativeArray<Vector3> vertics = new(triCount * 3, Allocator.Temp);
+        NativeArray<Vector3> vertics = new(verCount, Allocator.Temp);
         NativeArray<Triangle.Extended> eTris = new(triCount, Allocator.Temp);
         god.meshData.GetVertices(vertics);
 

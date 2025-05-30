@@ -18,6 +18,12 @@ public static class HelpMethods
         return new Vector3(a.x > b.x ? a.x : b.x, a.y > b.y ? a.y : b.y, a.z > b.z ? a.z : b.z);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static float Area(Vector3 e)
+    {
+        return e.x * e.y + e.y * e.z + e.z * e.x;
+    }
+
     /// <summary>
     /// One should be null
     /// </summary>
@@ -67,5 +73,21 @@ public static class HelpMethods
         id *= 31 + (int)Math.Round(shape.y * 1000);
         id *= 31 + (int)Math.Round(shape.z * 1000);
         return id;
+    }
+
+
+    private static readonly System.Diagnostics.Stopwatch stopwatch = new();
+
+    public static void Debug_toggleTimer(string note = "")
+    {
+        if (stopwatch.IsRunning == false)
+        {
+            stopwatch.Restart();
+        }
+        else
+        {
+            stopwatch.Stop();
+            Debug.Log(note + " time: " + stopwatch.Elapsed.TotalMilliseconds + "ms");
+        }
     }
 }
