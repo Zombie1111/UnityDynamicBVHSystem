@@ -197,7 +197,7 @@ public static class TLASBuilder
                     }
             
                     node = child2;
-                    if (dist1 != float.MaxValue) stack[stackI++] = node.leftBlasI;
+                    if (dist1 != float.MaxValue && node.leftBlasI > 0) stack[stackI++] = node.leftBlasI;//> 0 check is to prevent infininit loop, wrong with tlas
                     continue;
                 }
             
@@ -210,7 +210,7 @@ public static class TLASBuilder
                 }
                 
                 node = child1;
-                if (dist2 != float.MaxValue) stack[stackI++] = node.rightBlasI;
+                if (dist2 != float.MaxValue && node.rightBlasI > 0) stack[stackI++] = node.rightBlasI;//> 0 check is to prevent infininit loop, wrong with tlas
             }
             
             float IntersectAABB(in Vector3 min, in Vector3 max)
@@ -233,12 +233,13 @@ public static class TLASBuilder
 
         public void Debug_drawGizmos()
         {
+
             for (int i = 0; i < nodesLenght; i++)
             {
                 var node = nodes[i];
 
-                Gizmos.DrawLine(node.max, node.min);
                 Vector3 e = node.max - node.min;
+                Gizmos.color = Color.yellow;
                 Gizmos.DrawWireCube(node.min + (e * 0.5f), e);
 
                 if (node.IsLeaf() == true)
@@ -248,10 +249,10 @@ public static class TLASBuilder
                 }
                 else
                 {
-                    GetBlasInstance(node.leftBlasI, out BLASInstance blas);
-                    blas.Debug_drawGismos();
-                    GetBlasInstance(node.rightBlasI, out blas);
-                    blas.Debug_drawGismos();
+                    //GetBlasInstance(node.leftBlasI, out BLASInstance blas);
+                    //blas.Debug_drawGismos();
+                    //GetBlasInstance(node.rightBlasI, out blas);
+                    //blas.Debug_drawGismos();
                 }
             }
         }

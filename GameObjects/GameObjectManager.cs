@@ -9,36 +9,39 @@ using UnityEngine;
 public class GameObjectManager : MonoBehaviour
 {
     [SerializeField] private Transform raySource;
-    private NativeArray<BLASBuilder.BLASInstance> blasInstances;
+    private NativeArray<BLASBuilder.BLASInstance> blasInstances;//0 is unused so 1 is 0
     private NativeArray<int> blasInstanceLocks;
-    private BLASBuilder.BLASObject blas;
 
     private bool isInitlized = false;
+    [SerializeField] private List<Collider> cols = new();
+    private BLASBuilder.BLASObject[] blasObjects;
 
     // Start is called before the first frame update
     void Init()
     {
-        blasInstances = new(1, Allocator.Persistent);
-        blasInstanceLocks = new(1, Allocator.Persistent);
+        blasInstances = new(cols.Count + 1, Allocator.Persistent);
+        blasInstanceLocks = new(cols.Count, Allocator.Persistent);
+        blasObjects = new BLASBuilder.BLASObject[cols.Count];
 
-        GameObjectBuilder.GameObjectData gOd = new(GetComponent<MeshCollider>(), null);
-        //blas = GameObjectBuilder.CreateFrom(gOd);
-        Test_BlasJob blasJob = new()
+        for (int i = 0; i < cols.Count; i++)
         {
-            god = new(gOd, Allocator.TempJob),
-            blas = new(Allocator.TempJob)
-        };
+            GameObjectBuilder.GameObjectData gOd = new(cols[i], null);
+            Test_BlasJob blasJob = new()
+            {
+                god = new(gOd, Allocator.TempJob),
+                blas = new(Allocator.TempJob)
+            };
 
-        HelpMethods.Debug_toggleTimer();
-        var handle = blasJob.Schedule();
-        handle.Complete();
-        HelpMethods.Debug_toggleTimer();
+            var handle = blasJob.Schedule();
+            handle.Complete();
 
-        gOd.Dispose();
-        blas = blasJob.blas.Value;
-        blasJob.blas.Dispose();
-        blasJob.god.Dispose();
-        blasInstanceLocks[0] = 0;
+            gOd.Dispose();
+            blasObjects[i] = blasJob.blas.Value;
+            blasJob.blas.Dispose();
+            blasJob.god.Dispose();
+            blasInstanceLocks[i] = 0;
+        }
+
         isInitlized = true;
     }
 
@@ -81,11 +84,16 @@ public class GameObjectManager : MonoBehaviour
     private void Update()
     {
         if (isInitlized == false) Init();
-    
+
         //Debug rays
-        Matrix4x4 wToL = transform.worldToLocalMatrix;
-        Matrix4x4 lToW = transform.localToWorldMatrix;
-        blasInstances[0] = new(blas, ref wToL, ref lToW);
+        for (int i = 0; i < cols.Count; i++)
+        {
+            Matrix4x4 wToL = cols[i].transform.worldToLocalMatrix;
+            Matrix4x4 lToW = cols[i].transform.localToWorldMatrix;
+            blasInstances[i + 1] = new(blasObjects[i], ref wToL, ref lToW);
+        }
+
+
 
         if (rayJob.tlas.IsCreated == true)
         {
@@ -95,11 +103,11 @@ public class GameObjectManager : MonoBehaviour
 
         rayJob = new()
         {
-            tlas = new(new(blasInstances, blasInstanceLocks, 1), Allocator.Persistent),
+            tlas = new(new(blasInstances, blasInstanceLocks, cols.Count), Allocator.Persistent),
             pos = raySource.position,
             forward = raySource.forward
         };
-    
+
         var handle = rayJob.Schedule();
         handle.Complete();
     }
@@ -125,6 +133,9 @@ public class GameObjectManager : MonoBehaviour
             rayJob.tlas.Dispose();
         }
 
-        blas.Dispose();
+        for (int i = 0; i < cols.Count; i++)
+        {
+            blasObjects[i].Dispose();
+        }
     }
 }

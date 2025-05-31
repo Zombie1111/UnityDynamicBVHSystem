@@ -2,7 +2,9 @@
     "name": "DyBVHSys_api",
     "rootNamespace": "",
     "references": [
-        "GUID:e9ab9194090eb1f4c9dbe8bf4e505139"
+        "GUID:e9ab9194090eb1f4c9dbe8bf4e505139",
+        "GUID:e0cd26848372d4e5c891c569017e11f1",
+        "GUID:2665a8d13d1b3f18800f46e256720795"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
