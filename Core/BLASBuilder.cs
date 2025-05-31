@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
 using Unity.Collections;
 using UnityEngine;
@@ -21,184 +21,335 @@ public static class BLASBuilder
         /// </summary>
         internal int leftStartI;
         internal int triCount;
+
+        public static int SizeOf()
+        {
+            return UnsafeUtility.SizeOf<Node>();
+            //return (sizeof(float) * 6) + (sizeof(int) * 2);
+        }
     }
 
     /// <summary>
     /// A BLASObject is a local BVH
     /// </summary>
     [BurstCompile]
-    public readonly struct BLASObject
+    public readonly unsafe struct BLASObject
     {
-        internal readonly NativeArray<Node> nodes;
-        internal readonly NativeArray<Triangle> tris;
+        internal readonly Node* nodes;
+        internal readonly int nodesLenght;
+        internal readonly Triangle* tris;
+        internal readonly int trisLenght;
+        //internal readonly NativeArray<Node> nodes;
+        //internal readonly NativeArray<Triangle> tris;
 
         #region BLASObject creation
         public BLASObject(NativeArray<Triangle.Extended> eTris)
         {
             int triCount = eTris.Length;
-            NativeArray<Node> nodes = this.nodes = new(triCount * 2 - 1, Allocator.Persistent);
+            var axisSortedTrisI = new NativeArray<int>(triCount, Allocator.Temp);//* 3 not needed since cant pre-sort??
+            var leftMins = new NativeArray<Vector3>(triCount, Allocator.Temp);
+            var leftMaxs = new NativeArray<Vector3>(triCount, Allocator.Temp);
 
-            ////Sort tris per axis
-            //NativeArray<int> axisTriIs = new(triCount * 3, Allocator.Temp);
-            //eTris.Sort((a, b) => a.center.x.CompareTo(b.center.x));
+            nodesLenght = triCount * 2 - 1;
+            var nodes = this.nodes = (Node*)UnsafeUtility.Malloc(nodesLenght * Node.SizeOf(), UnsafeUtility.AlignOf<Node>(), Allocator.Persistent);
+            int i;
 
             //Build BVH
+            //Get root node
             int rootNodeI = 0;
             int nodesUsed = 1;
             Node rootNode = nodes[rootNodeI];
 
             rootNode.leftStartI = 0;
             rootNode.triCount = triCount;
-
-            Vector3 gizS = Vector3.one * 0.01f;
-
-            HelpMethods.Debug_toggleTimer();
-            Subdivide(ref rootNode, rootNodeI);
-            HelpMethods.Debug_toggleTimer();//1850ms with SAH wtf?
-
-            void Subdivide(ref Node node, int nodeI)
             {
-                //Update bounds
-                node.min = new Vector3(1e30f, 1e30f, 1e30f);
-                node.max = new Vector3(-1e30f, -1e30f, -1e30f);
-
-                for (int first = node.leftStartI, ii = 0; ii < node.triCount; ii++)
+                Vector3 nodeMin = Vector3.positiveInfinity;
+                Vector3 nodeMax = Vector3.negativeInfinity;
+            
+                for (i = 0; i < triCount; i++)
                 {
-                    Triangle.Extended tri = eTris[first + ii];
-
-                    node.min = HelpMethods.Min(node.min, tri.v0);
-                    node.min = HelpMethods.Min(node.min, tri.v1);
-                    node.min = HelpMethods.Min(node.min, tri.v2);
-                    node.max = HelpMethods.Max(node.max, tri.v0);
-                    node.max = HelpMethods.Max(node.max, tri.v1);
-                    node.max = HelpMethods.Max(node.max, tri.v2);
+                    Triangle.Extended tri = eTris[i];
+                    nodeMin = HelpMethods.Min(nodeMin, tri.v0);
+                    nodeMin = HelpMethods.Min(nodeMin, tri.v1);
+                    nodeMin = HelpMethods.Min(nodeMin, tri.v2);
+                    nodeMax = HelpMethods.Max(nodeMax, tri.v0);
+                    nodeMax = HelpMethods.Max(nodeMax, tri.v1);
+                    nodeMax = HelpMethods.Max(nodeMax, tri.v2);
                 }
 
-                Vector3 e = node.max - node.min; // extent of parent
-                float parentArea = e.x * e.y + e.y * e.z + e.z * e.x;
-                float parentCost = node.triCount * parentArea;
+                rootNode.min = nodeMin;
+                rootNode.max = nodeMax;
+            }
 
-                //Terminate recursion
-                if (node.triCount <= 2)
+            //Recursively subdivide the root node
+            Subdivide(ref rootNode, rootNodeI);
+
+            void Subdivide(ref Node node, int nodeIdx)//https://jacco.ompf2.com/2022/04/18/how-to-build-a-bvh-part-2-faster-rays/
+            {
+                //Stop splitting if too small
+                int count = node.triCount;
+
+                if (count <= 2)
                 {
-                    nodes[nodeI] = node;
+                    nodes[nodeIdx] = node;
                     return;
                 }
 
-                //Determine split axis and position
-                //SAH
-                int splitAxis = -1;
-                float splitPos = 0;
-                float bestCost = float.MaxValue;
+                //Split using SAH
+                //Get parent cost
+                int start = node.leftStartI;
+                Vector3 parentExtent = node.max - node.min;
+                float parentCost = count
+                    * (parentExtent.x * parentExtent.y + parentExtent.y * parentExtent.z + parentExtent.z * parentExtent.x);
 
-                for (int triOffset = 0; triOffset < node.triCount; triOffset++)
+                int bestAxis = -1;
+                float bestSplitPos = 0;
+                float bestCost = float.MaxValue;
+                Vector3 bestLeftMax = Vector3.zero;
+                Vector3 bestLeftMin = Vector3.zero;
+                Vector3 bestRightMax = Vector3.zero;
+                Vector3 bestRightMin = Vector3.zero;
+
+                for (int axis = 0; axis < 3; axis++)
                 {
-                    for (int axis = 0; axis < 3; axis++)
+                    //Sort triangles by center per axis. Ive tried pre sorting before any splitting but that fucks up the result, probably because of changed tri indexes when splitting.
+                    //This is the main bottleneck
+                    //int baseIdx = axis * triCount;
+                    int baseIdx = 0;//No need to offset if I cant pre sort anyway
+
+                    for (int i = 0; i < count; i++)//Fixlater: only need to sort the two axises other than the selected split one
                     {
-                        Triangle.Extended testTri = eTris[node.leftStartI + triOffset];
-                        float testTriPos = testTri.center[axis];
-                
-                        #region Get sah cost
-                        Vector3 lMin = Vector3.positiveInfinity, lMax = Vector3.negativeInfinity;
-                        Vector3 rMin = Vector3.positiveInfinity, rMax = Vector3.negativeInfinity;
-                        int lCount = 0;
-                        int rCount = 0;
-                
-                        for (int triI = 0; triI < node.triCount; triI++)
+                        axisSortedTrisI[baseIdx + i] = start + i;
+                    }
+
+                    #region Sort
+                    QuickSort(baseIdx, count, axis);//https://code-maze.com/csharp-quicksort-algorithm/
+
+                    void QuickSort(int baseIdx, int count, int axis)
+                    {
+                        //Insertion is faster for small arrays
+                        if (count < 17)
                         {
-                            Triangle.Extended tri = eTris[node.leftStartI + triI];
-                
-                            if (tri.center[axis] < testTriPos)
-                            {
-                                lCount++;
-                                lMin = HelpMethods.Min(lMin, tri.v0); lMax = HelpMethods.Max(lMax, tri.v0);
-                                lMin = HelpMethods.Min(lMin, tri.v1); lMax = HelpMethods.Max(lMax, tri.v1);
-                                lMin = HelpMethods.Min(lMin, tri.v2); lMax = HelpMethods.Max(lMax, tri.v2);
-                            }
-                            else
-                            {
-                                rCount++;
-                                rMin = HelpMethods.Min(rMin, tri.v0); rMax = HelpMethods.Max(rMax, tri.v0);
-                                rMin = HelpMethods.Min(rMin, tri.v1); rMax = HelpMethods.Max(rMax, tri.v1);
-                                rMin = HelpMethods.Min(rMin, tri.v2); rMax = HelpMethods.Max(rMax, tri.v2);
-                            }
+                            InsertionSort(baseIdx, count, axis);
+                            return;
                         }
-                
-                        float cost = lCount * HelpMethods.Area(lMax - lMin) + rCount * HelpMethods.Area(rMax - rMin);
-                        if (cost <= 0) cost = float.MaxValue;
-                        #endregion Get sah cost
-                
-                        if (cost < bestCost)
+
+                        int lo = baseIdx;
+                        int hi = baseIdx + count - 1;
+                        int mid = lo + ((hi - lo) >> 1);
+
+                        float a = eTris[axisSortedTrisI[lo]].center[axis];
+                        float b = eTris[axisSortedTrisI[mid]].center[axis];
+                        float c = eTris[axisSortedTrisI[hi]].center[axis];
+                        int pivotIdx;
+
+                        if ((a < b && b < c) || (c < b && b < a)) pivotIdx = mid;
+                        else if ((b < a && a < c) || (c < a && a < b)) pivotIdx = lo;
+                        else pivotIdx = hi;
+
+                        (axisSortedTrisI[pivotIdx], axisSortedTrisI[lo]) = (axisSortedTrisI[lo], axisSortedTrisI[pivotIdx]);
+
+                        float pivotValue = eTris[axisSortedTrisI[lo]].center[axis];
+                        int left = lo + 1;
+                        int right = hi;
+
+                        while (true)
                         {
-                            splitPos = testTriPos;
-                            splitAxis = axis;
-                            bestCost = cost;
+                            while (left <= right && eTris[axisSortedTrisI[left]].center[axis] < pivotValue)
+                                left++;
+
+                            while (right >= left && eTris[axisSortedTrisI[right]].center[axis] >= pivotValue)
+                                right--;
+
+                            if (left > right)
+                                break;
+
+                            (axisSortedTrisI[right], axisSortedTrisI[left]) = (axisSortedTrisI[left], axisSortedTrisI[right]);
+                            left++;
+                            right--;
+                        }
+
+                        (axisSortedTrisI[right], axisSortedTrisI[lo]) = (axisSortedTrisI[lo], axisSortedTrisI[right]);
+
+                        int leftLen = right - baseIdx;
+                        int rightLen = (baseIdx + count - 1) - (right + 1) + 1;
+
+                        //Sort the smallest half first
+                        if (leftLen < rightLen)
+                        {
+                            QuickSort(baseIdx, leftLen, axis);
+                            QuickSort(right + 1, rightLen, axis);
+                        }
+                        else
+                        {
+                            QuickSort(right + 1, rightLen, axis);
+                            QuickSort(baseIdx, leftLen, axis);
+                        }
+                    }
+
+                    void InsertionSort(int baseIdx, int length, int axis)//https://code-maze.com/insertion-sort-csharp/
+                    {
+                        for (int i = 1; i < length; i++)
+                        {
+                            int keyIdx = axisSortedTrisI[baseIdx + i];
+                            float keyVal = eTris[keyIdx].center[axis];
+                            int j = i - 1;
+
+                            while (j >= 0)
+                            {
+                                int idxJ = axisSortedTrisI[baseIdx + j];
+                                float valJ = eTris[idxJ].center[axis];
+                                if (valJ > keyVal)
+                                {
+                                    axisSortedTrisI[baseIdx + j + 1] = idxJ;
+                                    j--;
+                                }
+                                else
+                                {
+                                    break;
+                                }
+                            }
+                            axisSortedTrisI[baseIdx + j + 1] = keyIdx;
+                        }
+                    }
+                    #endregion Sort
+
+                    //Grow from left
+                    {
+                        Vector3 leftMin = Vector3.positiveInfinity;
+                        Vector3 leftMax = Vector3.negativeInfinity;
+
+                        for (int i = 0; i < count; i++)
+                        {
+                            int triIdx = axisSortedTrisI[baseIdx + i];
+                            Triangle.Extended tri = eTris[triIdx];
+
+                            leftMin = HelpMethods.Min(leftMin, tri.v0); leftMax = HelpMethods.Max(leftMax, tri.v0);
+                            leftMin = HelpMethods.Min(leftMin, tri.v1); leftMax = HelpMethods.Max(leftMax, tri.v1);
+                            leftMin = HelpMethods.Min(leftMin, tri.v2); leftMax = HelpMethods.Max(leftMax, tri.v2);
+
+                            leftMaxs[i] = leftMax;
+                            leftMins[i] = leftMin;
+                        }
+                    }
+
+                    //Grow from right and get if best so far
+                    {
+                        Vector3 rightMin = Vector3.positiveInfinity;
+                        Vector3 rightMax = Vector3.negativeInfinity;
+
+                        for (int i = count - 1; i >= 0; i--)
+                        {
+                            int triIdx = axisSortedTrisI[baseIdx + i];
+                            Triangle.Extended tri = eTris[triIdx];
+
+                            rightMin = HelpMethods.Min(rightMin, tri.v0); rightMax = HelpMethods.Max(rightMax, tri.v0);
+                            rightMin = HelpMethods.Min(rightMin, tri.v1); rightMax = HelpMethods.Max(rightMax, tri.v1);
+                            rightMin = HelpMethods.Min(rightMin, tri.v2); rightMax = HelpMethods.Max(rightMax, tri.v2);
+
+                            if (i == 0) break;
+                            Vector3 leftMax = leftMaxs[i - 1];
+                            Vector3 leftMin = leftMins[i - 1];
+                            float cost = i * HelpMethods.Area(leftMax - leftMin) + (count - i) * HelpMethods.Area(rightMax - rightMin);
+
+                            if (cost < bestCost)
+                            {
+                                bestLeftMax = leftMax;
+                                bestLeftMin = leftMin;
+                                bestRightMax = rightMax;
+                                bestRightMin = rightMin;
+
+                                bestCost = cost;
+                                bestAxis = axis;
+                                bestSplitPos = 0.5f * (eTris[axisSortedTrisI[baseIdx + i - 1]].center[axis] + tri.center[axis]);
+                            }
                         }
                     }
                 }
-                
+
+                //Stop splitting if not better than parent
                 if (bestCost >= parentCost)
                 {
+                    nodes[nodeIdx] = node;
                     return;
                 }
 
-                ////Longest axis
-                //Vector3 extent = node.max - node.min;
-                //int splitAxis = 0;
-                //if (extent.y > extent.x) splitAxis = 1;
-                //if (extent.z > extent[splitAxis]) splitAxis = 2;
-                //float splitPos = node.min[splitAxis] + (extent[splitAxis] * 0.5f);
+                //Split tris by best axis and pos
+                int splitStartI = start;
+                int splitEndI = start + count - 1;
 
-                //Split triangles
-                int i = node.leftStartI;
-                int j = i + node.triCount - 1;
-
-                while (i <= j)
+                while (splitStartI <= splitEndI)
                 {
-                    if (eTris[i].center[splitAxis] < splitPos)
+                    if (eTris[splitStartI].center[bestAxis] < bestSplitPos)
                     {
-                        i++;
-                        continue;
+                        splitStartI++;
                     }
-
-                    (eTris[j], eTris[i]) = (eTris[i], eTris[j]);
-                    j--;
+                    else
+                    {
+                        (eTris[splitStartI], eTris[splitEndI]) = (eTris[splitEndI], eTris[splitStartI]);
+                        splitEndI--;
+                    }
                 }
 
-                //Want more kids?
-                int leftCount = i - node.leftStartI;
-                if (leftCount == 0 || leftCount == node.triCount)
+                //Stop splitting if all tris is on one side
+                int leftCountFinal = splitStartI - start;
+                if (leftCountFinal == 0 || leftCountFinal == count)
                 {
-                    nodes[nodeI] = node;
+                    nodes[nodeIdx] = node;
                     return;
                 }
 
-                //Create kids
-                int leftKidI = nodesUsed++;
-                int rightKidI = nodesUsed++;
+                //Make more kids
+                int leftChildIdx = nodesUsed++;
+                int rightChildIdx = nodesUsed++;
 
-                Node leftKid = nodes[leftKidI];
-                Node rightKid = nodes[rightKidI];
-                leftKid.leftStartI = node.leftStartI;
-                leftKid.triCount = leftCount;
-                rightKid.leftStartI = i;
-                rightKid.triCount = node.triCount - leftCount;
+                Node leftChild = new()
+                {
+                    leftStartI = start,
+                    triCount = leftCountFinal,
+                    min = bestLeftMin,
+                    max = bestLeftMax
+                };
 
-                node.leftStartI = leftKidI;
+                Node rightChild = new()
+                {
+                    leftStartI = start + leftCountFinal,
+                    triCount = count - leftCountFinal,
+                    min = bestRightMin,
+                    max = bestRightMax
+                };
+
+                //Make input node a branch
+                node.leftStartI = -1;
                 node.triCount = 0;
-                nodes[nodeI] = node;
+                node.leftStartI = leftChildIdx;
+                nodes[nodeIdx] = node;
 
-                Subdivide(ref leftKid, leftKidI);
-                Subdivide(ref rightKid, rightKidI);
+                //Recursively subdivide children
+                nodes[leftChildIdx] = leftChild;
+                Subdivide(ref leftChild, leftChildIdx);
+
+                nodes[rightChildIdx] = rightChild;
+                Subdivide(ref rightChild, rightChildIdx);
             }
 
             //Extended triangles to normal triangles
-            tris = new(triCount, Allocator.Persistent);
+            trisLenght = triCount;
+            tris = (Triangle*)UnsafeUtility.Malloc(trisLenght * Triangle.SizeOf(), UnsafeUtility.AlignOf<Triangle>(), Allocator.Persistent);
 
-            for (int i = 0; i < triCount; i++)
+            for (i = 0; i < triCount; i++)
             {
                 tris[i] = new(eTris[i]);
             }
+        }
+
+        /// <summary>
+        /// There is no check for if its has already been diposed!
+        /// </summary>
+        public void Dispose()
+        {
+            if (trisLenght > 0) UnsafeUtility.Free(tris, Allocator.Persistent);
+            if (nodesLenght > 0) UnsafeUtility.Free(nodes, Allocator.Persistent);
         }
 
         #endregion BLASObject creation
@@ -210,32 +361,36 @@ public static class BLASBuilder
 
         public BLASInstance(in BLASObject blasO, ref Matrix4x4 wToL, ref Matrix4x4 lToW)
         {
-            nodesPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.nodes);
-            nodesLenght = blasO.nodes.Length;
-            trisPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.tris);
-            trisLenght = blasO.tris.Length;
+            nodes = blasO.nodes;
+            nodesLenght = blasO.nodesLenght;
+            tris = blasO.tris;
+            trisLenght = blasO.trisLenght;
+            //nodesPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.nodes);
+            //nodesLenght = blasO.nodes.Length;
+            //trisPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.tris);
+            //trisLenght = blasO.tris.Length;
 
             this.wToL = wToL;
 
             Node node = blasO.nodes[0];
             Vector3 localExtents = 0.5f * (node.max - node.min);
             Vector3 worldCenter = lToW.MultiplyPoint3x4(0.5f * (node.min + node.max));
-            Vector3 worldExtents = new            (
+            Vector3 worldExtents = new(
               Math.Abs(lToW.m00) * localExtents.x + Math.Abs(lToW.m01) * localExtents.y + Math.Abs(lToW.m02) * localExtents.z,
               Math.Abs(lToW.m10) * localExtents.x + Math.Abs(lToW.m11) * localExtents.y + Math.Abs(lToW.m12) * localExtents.z,
               Math.Abs(lToW.m20) * localExtents.x + Math.Abs(lToW.m21) * localExtents.y + Math.Abs(lToW.m22) * localExtents.z
             );
-            
+
             min = worldCenter - worldExtents;
             max = worldCenter + worldExtents;
         }
 
-        private void* nodesPTR;
+        private Node* nodes;
         /// <summary>
         /// 0 if unused, negative if disabled
         /// </summary>
         internal int nodesLenght;
-        private void* trisPTR;
+        private Triangle* tris;
         private int trisLenght;
 
         private Matrix4x4 wToL;
@@ -250,18 +405,24 @@ public static class BLASBuilder
 
         internal void SetBLASObject(in BLASObject blasO)
         {
-            nodesPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.nodes);
-            nodesLenght = blasO.nodes.Length;
-            trisPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.tris);
-            trisLenght = blasO.tris.Length;
+            nodes = blasO.nodes;
+            nodesLenght = blasO.nodesLenght;
+            tris = blasO.tris;
+            trisLenght = blasO.trisLenght;
+
+            //nodesPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.nodes);
+            //nodesLenght = blasO.nodes.Length;
+            //trisPTR = NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(blasO.tris);
+            //trisLenght = blasO.tris.Length;
         }
 
         internal void SetMatrix(ref Matrix4x4 wToL, ref Matrix4x4 lToW)
         {
             this.wToL = wToL;
 
-            Node node = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<Node>(
-                nodesPTR, nodesLenght, Allocator.None)[0];//Could use raw pointer
+            Node node = nodes[0];
+            //Node node = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<Node>(
+            //    nodesPTR, nodesLenght, Allocator.None)[0];//Could use raw pointer
 
             Vector3 localExtents = 0.5f * (node.max - node.min);
             Vector3 worldCenter = lToW.MultiplyPoint3x4(0.5f * (node.min + node.max));
@@ -290,22 +451,25 @@ public static class BLASBuilder
             float hitDisL = ray.maxDistance * disScale;
             int hitTriI = -1;
 
-            NativeArray<Node> nodes = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<Node>(
-                nodesPTR, nodesLenght, Allocator.None);
-            NativeArray<Triangle> tris = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<Triangle>(
-                trisPTR, trisLenght, Allocator.None);
+            var nodes = this.nodes;
+            var tris = this.tris;
 
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
-            NativeArrayUnsafeUtility.SetAtomicSafetyHandle(ref nodes, AtomicSafetyHandle.
-            GetTempUnsafePtrSliceHandle
-            ());
-#endif
+            //NativeArray<Node> nodes = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<Node>(
+            //    nodesPTR, nodesLenght, Allocator.None);
+            //NativeArray<Triangle> tris = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<Triangle>(
+            //    trisPTR, trisLenght, Allocator.None);
 
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
-            NativeArrayUnsafeUtility.SetAtomicSafetyHandle(ref tris, AtomicSafetyHandle.
-            GetTempUnsafePtrSliceHandle
-            ());
-#endif
+            //#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            //            NativeArrayUnsafeUtility.SetAtomicSafetyHandle(ref nodes, AtomicSafetyHandle.
+            //            GetTempUnsafePtrSliceHandle
+            //            ());
+            //#endif
+            //
+            //#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            //            NativeArrayUnsafeUtility.SetAtomicSafetyHandle(ref tris, AtomicSafetyHandle.
+            //            GetTempUnsafePtrSliceHandle
+            //            ());
+            //#endif
 
             IntersectBVH(0);
 
@@ -339,7 +503,7 @@ public static class BLASBuilder
             }
 
             bool IntersectAABB(in Vector3 min, in Vector3 max)
-{
+            {
                 float tx1 = (min.x - orginL.x) / dirL.x, tx2 = (max.x - orginL.x) / dirL.x;
                 float tmin = Math.Min(tx1, tx2), tmax = Math.Max(tx1, tx2);
                 float ty1 = (min.y - orginL.y) / dirL.y, ty2 = (max.y - orginL.y) / dirL.y;
@@ -386,14 +550,15 @@ public static class BLASBuilder
         public void Debug_drawGismos()
         {
             Matrix4x4 lToW = wToL.inverse;
-            NativeArray<Node> nodes = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<Node>(
-                nodesPTR, nodesLenght, Allocator.None);
+            var nodes = this.nodes;
+            //NativeArray<Node> nodes = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<Node>(
+            //    nodesPTR, nodesLenght, Allocator.None);
 
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
-            NativeArrayUnsafeUtility.SetAtomicSafetyHandle(ref nodes, AtomicSafetyHandle.
-            GetTempUnsafePtrSliceHandle
-            ());
-#endif
+//#if ENABLE_UNITY_COLLECTIONS_CHECKS
+//            NativeArrayUnsafeUtility.SetAtomicSafetyHandle(ref nodes, AtomicSafetyHandle.
+//            GetTempUnsafePtrSliceHandle
+//            ());
+//#endif
 
             float maxDepth = Mathf.Log(nodesLenght, 2);
             DrawNode(nodes[0], 0);

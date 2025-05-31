@@ -6,6 +6,7 @@ using BLASInstance = BLASBuilder.BLASInstance;
 using Unity.Collections;
 using System;
 using Unity.Burst;
+using Unity.Collections.LowLevel.Unsafe;
 
 public static class TLASBuilder
 {
@@ -27,13 +28,20 @@ public static class TLASBuilder
             this.max = max;
             this.blasI = blasI;
         }
+
+        internal static int SizeOf()
+        {
+            return UnsafeUtility.SizeOf<Node>();
+            //return (sizeof(float) * 6) + (sizeof(short) * 2) + sizeof(int);
+        }
     }
 
     [BurstCompile]
-    public readonly struct TLASScene
+    public readonly unsafe struct TLASScene
     {
         #region TlasScene build
-        private readonly NativeArray<Node> nodes;
+        private readonly Node* nodes;
+        private readonly int nodesLenght;
         private readonly NativeArray<BLASInstance> blasInstances;
         private readonly NativeArray<int> blasInstanceLocks;
 
@@ -42,8 +50,8 @@ public static class TLASBuilder
         /// </summary>
         public TLASScene(NativeArray<BLASInstance> blasInstances, NativeArray<int> blasInstanceLocks, int activeBlasCount)
         {
-            NativeArray<Node> nodes = new(activeBlasCount * 2, Allocator.Persistent);//tlasNode //Fixlater: require activeBlastCount as input to func
-            this.nodes = nodes;
+            nodesLenght = activeBlasCount * 2;
+            var nodes = this.nodes = (Node*)UnsafeUtility.Malloc(nodesLenght * Node.SizeOf(), UnsafeUtility.AlignOf<Node>(), Allocator.Persistent);
             this.blasInstances = blasInstances;
             this.blasInstanceLocks = blasInstanceLocks;
 
@@ -68,7 +76,7 @@ public static class TLASBuilder
             //Agglomerate clustering
             int nodesLeft = activeBlasCount;//nodeIndices 
             int a = 0;
-            int b = FindBestMatch(a);
+            int b = FindBestMatch(a);//https://jacco.ompf2.com/2022/05/13/how-to-build-a-bvh-part-6-all-together-now/
 
             while (nodesLeft > 1)
             {
@@ -121,11 +129,11 @@ public static class TLASBuilder
         }
 
         /// <summary>
-        /// blasInstances and blasInstanceLocks are not disposed
+        /// blasInstances and blasInstanceLocks are not disposed, no checks if its already disposed
         /// </summary>
         public void Dispose()
         {
-            if (nodes.IsCreated == true) nodes.Dispose();
+            if (nodesLenght > 0) UnsafeUtility.Free(nodes, Allocator.Persistent);
         }
 
         public void GetBlasInstance(int blasI, out BLASInstance blas)
@@ -140,93 +148,95 @@ public static class TLASBuilder
         [BurstCompile]
         public void Raycast(in Ray ray, out Hit hit)
         {
-            //Node node = nodes[0];
-            //float bestHitDis = int.MaxValue;
-            //NativeArray<int> stack = new(64, Allocator.Temp);
-            //int stackI = 0;
-            //Vector3 orgin = ray.orgin;
-            //Vector3 dir = ray.direction;
+            Node node = nodes[0];
+            float bestHitDis = int.MaxValue;
+            NativeArray<int> stack = new(64, Allocator.Temp);
+            int stackI = 0;
+            Vector3 orgin = ray.orgin;
+            Vector3 dir = ray.direction;
             hit = new(ray);
 
-            GetBlasInstance(0, out BLASInstance blas);
-            if (blas.Raycast(ray, out Hit newHit) == true)
+            //GetBlasInstance(0, out BLASInstance blas);
+            //if (blas.Raycast(ray, out Hit newHit) == true)
+            //{
+            //    hit = newHit;
+            //}
+
+
+
+            
+            while (true)
             {
-                hit = newHit;
+                if (node.IsLeaf() == true)
+                {
+                    GetBlasInstance(node.blasI, out BLASInstance blas);
+                    if (blas.Raycast(ray, out Hit newHit) == true && newHit.dis < bestHitDis)
+                    {
+                        bestHitDis = newHit.dis;
+                        hit = newHit;
+                    }
+            
+                    if (stackI == 0) break;
+                    node = nodes[stack[--stackI]];
+                    continue;
+                }
+            
+                Node child1 = nodes[node.leftBlasI];
+                Node child2 = nodes[node.rightBlasI];
+                float dist1 = IntersectAABB(child1.min, child1.max);
+                float dist2 = IntersectAABB(child2.min, child2.max);
+            
+                //2 is main
+                if (dist1 > dist2)
+                {
+                    if (dist2 == float.MaxValue)
+                    {
+                        if (stackI == 0) break;
+                        node = nodes[stack[--stackI]];
+                        continue;
+                    }
+            
+                    node = child2;
+                    if (dist1 != float.MaxValue) stack[stackI++] = node.leftBlasI;
+                    continue;
+                }
+            
+                //1 is main
+                if (dist1 == float.MaxValue)
+                {
+                    if (stackI == 0) break;
+                    node = nodes[stack[--stackI]];
+                    continue;
+                }
+                
+                node = child1;
+                if (dist2 != float.MaxValue) stack[stackI++] = node.rightBlasI;
             }
-
-
-
-            //
-            //while (true)
-            //{
-            //    if (node.IsLeaf() == true)
-            //    {
-            //        GetBlasInstance(node.blasI, out BLASInstance blas);
-            //        if (blas.Raycast(ray, out Hit newHit) == true && newHit.dis < bestHitDis)
-            //        {
-            //            bestHitDis = newHit.dis;
-            //            hit = newHit;
-            //        }
-            //
-            //        if (stackI == 0) break;
-            //        node = nodes[stack[--stackI]];
-            //        continue;
-            //    }
-            //
-            //    Node child1 = nodes[node.leftBlasI];
-            //    Node child2 = nodes[node.rightBlasI];
-            //    float dist1 = IntersectAABB(child1.min, child1.max);
-            //    float dist2 = IntersectAABB(child2.min, child2.max);
-            //
-            //    //2 is main
-            //    if (dist1 > dist2)
-            //    {
-            //        if (dist2 == float.MaxValue)
-            //        {
-            //            if (stackI == 0) break;
-            //            node = nodes[stack[--stackI]];
-            //            continue;
-            //        }
-            //
-            //        node = child2;
-            //        if (dist1 != float.MaxValue) stack[stackI++] = node.leftBlasI;
-            //        continue;
-            //    }
-            //
-            //    //1 is main
-            //    if (dist1 == float.MaxValue)
-            //    {
-            //        if (stackI == 0) break;
-            //        node = nodes[stack[--stackI]];
-            //        continue;
-            //    }
-            //    
-            //    node = child1;
-            //    if (dist2 != float.MaxValue) stack[stackI++] = node.rightBlasI;
-            //}
-            //
-            //float IntersectAABB(in Vector3 min, in Vector3 max)
-            //{
-            //    float tx1 = (min.x - orgin.x) / dir.x, tx2 = (max.x - orgin.x) / dir.x;
-            //    float tmin = Math.Min(tx1, tx2), tmax = Math.Max(tx1, tx2);
-            //    float ty1 = (min.y - orgin.y) / dir.y, ty2 = (max.y - orgin.y) / dir.y;
-            //    tmin = Math.Max(tmin, Math.Min(ty1, ty2)); tmax = Math.Min(tmax, Math.Max(ty1, ty2));
-            //    float tz1 = (min.z - orgin.z) / dir.z, tz2 = (max.z - orgin.z) / dir.z;
-            //    tmin = Math.Max(tmin, Math.Min(tz1, tz2)); tmax = Math.Min(tmax, Math.Max(tz1, tz2));
-            //
-            //    //return tmax >= tmin && tmin < hitDisL && tmax > 0;
-            //    return tmax >= tmin && tmin < bestHitDis && tmax > 0 ? tmin : float.MaxValue;
-            //}
+            
+            float IntersectAABB(in Vector3 min, in Vector3 max)
+            {
+                float tx1 = (min.x - orgin.x) / dir.x, tx2 = (max.x - orgin.x) / dir.x;
+                float tmin = Math.Min(tx1, tx2), tmax = Math.Max(tx1, tx2);
+                float ty1 = (min.y - orgin.y) / dir.y, ty2 = (max.y - orgin.y) / dir.y;
+                tmin = Math.Max(tmin, Math.Min(ty1, ty2)); tmax = Math.Min(tmax, Math.Max(ty1, ty2));
+                float tz1 = (min.z - orgin.z) / dir.z, tz2 = (max.z - orgin.z) / dir.z;
+                tmin = Math.Max(tmin, Math.Min(tz1, tz2)); tmax = Math.Min(tmax, Math.Max(tz1, tz2));
+            
+                //return tmax >= tmin && tmin < hitDisL && tmax > 0;
+                return tmax >= tmin && tmin < bestHitDis && tmax > 0 ? tmin : float.MaxValue;
+            }
         }
 
         #endregion TlasScene raycast
 
         #region Debug
 
-        public void Debug_drawGismos()
+        public void Debug_drawGizmos()
         {
-            foreach (Node node in nodes)
+            for (int i = 0; i < nodesLenght; i++)
             {
+                var node = nodes[i];
+
                 Gizmos.DrawLine(node.max, node.min);
                 Vector3 e = node.max - node.min;
                 Gizmos.DrawWireCube(node.min + (e * 0.5f), e);

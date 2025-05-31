@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using Unity.Burst;
+using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine;
 
 public static class Globals
@@ -22,6 +23,12 @@ public readonly struct Triangle
         v1 = extendedTri.v1;
         v2 = extendedTri.v2;
         matI = extendedTri.matID;
+    }
+
+    internal static int SizeOf()
+    {
+        return UnsafeUtility.SizeOf<Triangle>();
+        //return (sizeof(float) * 9) + sizeof(short);
     }
 
     public readonly Vector3 v0;

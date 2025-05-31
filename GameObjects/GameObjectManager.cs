@@ -11,54 +11,42 @@ public class GameObjectManager : MonoBehaviour
     [SerializeField] private Transform raySource;
     private NativeArray<BLASBuilder.BLASInstance> blasInstances;
     private NativeArray<int> blasInstanceLocks;
-    //TLASBuilder.TLASScene tlas;
     private BLASBuilder.BLASObject blas;
 
-    private bool iscre = false;
+    private bool isInitlized = false;
 
     // Start is called before the first frame update
-    void ddddd()
+    void Init()
     {
         blasInstances = new(1, Allocator.Persistent);
         blasInstanceLocks = new(1, Allocator.Persistent);
 
         GameObjectBuilder.GameObjectData gOd = new(GetComponent<MeshCollider>(), null);
-        blas = GameObjectBuilder.CreateFrom(gOd);
-
-        Matrix4x4 wToL = transform.worldToLocalMatrix;
-        Matrix4x4 lToW = transform.localToWorldMatrix;
-        //blasInstances[0] = new(blas, ref wToL, ref lToW);
-        blasInstanceLocks[0] = 0;
-        //tlas = new(blasInstances, blasInstanceLocks, 1);
-        iscre = true;
-    }
-
-    private RayJob job;
-
-    private void Update()
-    {
-        if (iscre == false) ddddd();
-
-        Matrix4x4 wToL = transform.worldToLocalMatrix;
-        Matrix4x4 lToW = transform.localToWorldMatrix;
-        blasInstances[0] = new(blas, ref wToL, ref lToW);
-
-        job = new()
+        //blas = GameObjectBuilder.CreateFrom(gOd);
+        Test_BlasJob blasJob = new()
         {
-            tlas = new(new(blasInstances, blasInstanceLocks, 1), Allocator.Persistent),
-            pos = raySource.position,
-            forward = raySource.forward
+            god = new(gOd, Allocator.TempJob),
+            blas = new(Allocator.TempJob)
         };
 
-        var handle = job.Schedule();
+        HelpMethods.Debug_toggleTimer();
+        var handle = blasJob.Schedule();
         handle.Complete();
+        HelpMethods.Debug_toggleTimer();
 
-        job.tlas.Dispose();
-        //DoRays();
+        gOd.Dispose();
+        blas = blasJob.blas.Value;
+        blasJob.blas.Dispose();
+        blasJob.god.Dispose();
+        blasInstanceLocks[0] = 0;
+        isInitlized = true;
     }
 
+    private Test_RayJob rayJob;
+
+
     [BurstCompile]
-    private struct RayJob : IJob
+    private struct Test_RayJob : IJob
     {
         public NativeReference<TLASBuilder.TLASScene> tlas;
         public Vector3 pos;
@@ -77,46 +65,66 @@ public class GameObjectManager : MonoBehaviour
         }
     }
 
-    //[BurstCompile]
-    //private void DoRays()
-    //{
-    //    for (int i = 0; i < 10000; i++)
-    //    {
-    //        Ray ray = new(raySource.position, raySource.forward);
-    //        tlas.Raycast(ray, out Hit hit);
-    //    }
-    //}
-    //
-    //private void OnDrawGizmos()
-    //{
-    //    return;
-    //    if (Application.isPlaying == false) return;
-    //
-    //    if (iscre == false) ddddd();
-    //
-    //    Matrix4x4 wToL = transform.worldToLocalMatrix;
-    //    Matrix4x4 lToW = transform.localToWorldMatrix;
-    //    blasInstances[0] = new(blas, ref wToL, ref lToW);
-    //
-    //    Gizmos.color = Color.yellow;
-    //    tlas = new(blasInstances, blasInstanceLocks, 1);
-    //
-    //    Gizmos.color = Color.green;
-    //    tlas.Debug_drawGismos();
-    //
-    //    Ray ray = new(raySource.position, raySource.forward);
-    //    tlas.Raycast(ray, out Hit hit);
-    //    Gizmos.color = Color.blue;
-    //    Gizmos.DrawLine(raySource.position, hit.pos);
-    //
-    //    //Physics.Raycast(ray.orgin, ray.direction, out RaycastHit hitt);
-    //    //Debug.Log("ur " + hitt.distance + " br " + hit.dis);
-    //}
+
+    [BurstCompile]
+    private struct Test_BlasJob : IJob
+    {
+        public NativeReference<GameObjectBuilder.GameObjectData> god;
+        public NativeReference<BLASBuilder.BLASObject> blas;
+
+        public void Execute()
+        {
+            blas.Value = GameObjectBuilder.CreateFrom(god.Value);
+        }
+    }
+
+    private void Update()
+    {
+        if (isInitlized == false) Init();
+    
+        //Debug rays
+        Matrix4x4 wToL = transform.worldToLocalMatrix;
+        Matrix4x4 lToW = transform.localToWorldMatrix;
+        blasInstances[0] = new(blas, ref wToL, ref lToW);
+
+        if (rayJob.tlas.IsCreated == true)
+        {
+            rayJob.tlas.Value.Dispose();
+            rayJob.tlas.Dispose();
+        }
+
+        rayJob = new()
+        {
+            tlas = new(new(blasInstances, blasInstanceLocks, 1), Allocator.Persistent),
+            pos = raySource.position,
+            forward = raySource.forward
+        };
+    
+        var handle = rayJob.Schedule();
+        handle.Complete();
+    }
+
+    private void OnDrawGizmos()
+    {
+        //return;
+        if (Application.isPlaying == false) return;
+        if (isInitlized == false) Init();
+    
+        ////Draw tlas
+        if (rayJob.tlas.IsCreated == true) rayJob.tlas.Value.Debug_drawGizmos();
+    }
 
     private void OnDestroy()
     {
-        //tlas.Dispose();
         blasInstances.Dispose();
         blasInstanceLocks.Dispose();
+
+        if (rayJob.tlas.IsCreated == true)
+        {
+            rayJob.tlas.Value.Dispose();
+            rayJob.tlas.Dispose();
+        }
+
+        blas.Dispose();
     }
 }

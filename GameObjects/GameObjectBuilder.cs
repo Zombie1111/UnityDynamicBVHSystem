@@ -30,7 +30,8 @@ public static class GameObjectBuilder
                 type = ShapeType.ConcaveMesh;
                 Mesh mesh = mf.sharedMesh;
 
-                meshData = Mesh.AcquireReadOnlyMeshData(mesh)[0];
+                meshDataArray = Mesh.AcquireReadOnlyMeshData(mesh);
+                var meshData = meshDataArray[0];
                 if (SetSubMeshMatIndexs(mesh.subMeshCount) == false)
                 {
                     type = ShapeType.Invalid;
@@ -44,9 +45,10 @@ public static class GameObjectBuilder
                 type = meshC.convex == true ? ShapeType.ConvexMesh : ShapeType.ConcaveMesh;
 
                 Mesh mesh = meshC.sharedMesh;
-
+                
                 Debug.Log(mesh.triangles.Length + " " + mesh.vertices.Length + " " + mesh.GetIndexCount(0));
-                meshData = Mesh.AcquireReadOnlyMeshData(mesh)[0];
+                meshDataArray = Mesh.AcquireReadOnlyMeshData(mesh);
+                var meshData = meshDataArray[0];
                 if (SetSubMeshMatIndexs(meshC.convex == true ? 1 : mesh.subMeshCount) == false)
                 {
                     type = ShapeType.Invalid;
@@ -77,7 +79,7 @@ public static class GameObjectBuilder
             else
             {
                 Debug.LogError(col.GetType() + " is not supported by the BVH builder!");
-                offset = Vector3.zero; scale = Vector3.zero; type = ShapeType.Invalid; meshData = new();
+                offset = Vector3.zero; scale = Vector3.zero; type = ShapeType.Invalid; meshDataArray = new();
                 return;
             }
 
@@ -113,10 +115,15 @@ public static class GameObjectBuilder
                 id *= 31 + (int)Math.Round(scale.y * 1000);
                 id *= 31 + (int)Math.Round(scale.z * 1000);
                 id *= 31 + (int)type;
-                if (type == ShapeType.ConcaveMesh || type == ShapeType.ConvexMesh) id *= 31 + meshData.vertexCount;
+                if (type == ShapeType.ConcaveMesh || type == ShapeType.ConvexMesh) id *= 31 + meshDataArray[0].vertexCount;
             }
 
             return id;
+        }
+
+        public void Dispose()
+        {
+            meshDataArray.Dispose();
         }
 
         internal readonly Vector3 offset;
@@ -125,44 +132,45 @@ public static class GameObjectBuilder
         /// </summary>
         internal readonly Vector3 scale;
         internal readonly ShapeType type;
-        internal readonly MeshData meshData;
+        internal readonly MeshDataArray meshDataArray;
         internal readonly FixedBytes16 subMeshMatI; internal const int _maxSubMeshes = 8;
     }
 
     internal static unsafe BLASObject CreateFrom(in GameObjectData god)
     {
-        if (god.type != ShapeType.ConcaveMesh)
-        {
-            throw new Exception(god.type + " not implemented!");
-        }
+        //if (god.type != ShapeType.ConcaveMesh)
+        //{
+        //    throw new Exception(god.type + " not implemented!");
+        //}
 
         //Get mesh data and allocate native arrays
-        int subMeshCount = god.meshData.subMeshCount;
+        var meshData = god.meshDataArray[0];
+        int subMeshCount = meshData.subMeshCount;
         int maxIndicesCount = 0;
         int totalIndicesCount = 0;
 
         for (int i = 0; i < subMeshCount; i++)
         {
-            SubMeshDescriptor subMD = god.meshData.GetSubMesh(i);
+            SubMeshDescriptor subMD = meshData.GetSubMesh(i);
             if (subMD.topology != MeshTopology.Triangles) Debug.LogError("Mesh topology must be Triangles");
             maxIndicesCount = Math.Max(maxIndicesCount, subMD.indexCount);
             totalIndicesCount += subMD.indexCount;
         }
 
-        int verCount = god.meshData.vertexCount;
-        if (totalIndicesCount % 3 != 0)
-        {
-            //== 2 means its one less vertex so out of bounds is likely
-            if (totalIndicesCount % 3 == 2) Debug.LogError(god.meshData + " vertex count is not dividable with 3, may cause issues!");
-            else Debug.LogWarning(god.meshData + " vertex count is not dividable with 3, may cause issues!");
-        }
+        int verCount = meshData.vertexCount;
+        //if (totalIndicesCount % 3 != 0)
+        //{
+        //    //== 2 means its one less vertex so out of bounds is likely
+        //    if (totalIndicesCount % 3 == 2) Debug.LogError(god.meshData + " vertex count is not dividable with 3, may cause issues!");
+        //    else Debug.LogWarning(god.meshData + " vertex count is not dividable with 3, may cause issues!");
+        //}
 
         int triCount = totalIndicesCount / 3;
         int triI = 0;
         NativeArray<int> indices = new(maxIndicesCount, Allocator.Temp);
         NativeArray<Vector3> vertics = new(verCount, Allocator.Temp);
         NativeArray<Triangle.Extended> eTris = new(triCount, Allocator.Temp);
-        god.meshData.GetVertices(vertics);
+        meshData.GetVertices(vertics);
 
         //Get triangles per submesh
         fixed (FixedBytes16* subMeshMatI_ptr = &god.subMeshMatI)
@@ -171,9 +179,9 @@ public static class GameObjectBuilder
 
             for (int i = 0; i < subMeshCount; i++)
             {
-                SubMeshDescriptor subMD = god.meshData.GetSubMesh(i);
+                SubMeshDescriptor subMD = meshData.GetSubMesh(i);
                 int subIndiceCount = subMD.indexCount;
-                god.meshData.GetIndices(indices, i, true);
+                meshData.GetIndices(indices, i, true);
 
                 for (int subIndiceI = 0; subIndiceI < subIndiceCount; subIndiceI += 3)
                 {
