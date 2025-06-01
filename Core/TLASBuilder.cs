@@ -195,9 +195,9 @@ public static class TLASBuilder
                         node = nodes[stack[--stackI]];
                         continue;
                     }
-            
+
+                    if (dist1 != float.MaxValue) stack[stackI++] = node.leftBlasI;
                     node = child2;
-                    if (dist1 != float.MaxValue && node.leftBlasI > 0) stack[stackI++] = node.leftBlasI;//> 0 check is to prevent infininit loop, wrong with tlas
                     continue;
                 }
             
@@ -208,9 +208,9 @@ public static class TLASBuilder
                     node = nodes[stack[--stackI]];
                     continue;
                 }
-                
+
+                if (dist2 != float.MaxValue) stack[stackI++] = node.rightBlasI;
                 node = child1;
-                if (dist2 != float.MaxValue && node.rightBlasI > 0) stack[stackI++] = node.rightBlasI;//> 0 check is to prevent infininit loop, wrong with tlas
             }
             
             float IntersectAABB(in Vector3 min, in Vector3 max)

@@ -46,7 +46,6 @@ public static class GameObjectBuilder
 
                 Mesh mesh = meshC.sharedMesh;
                 
-                Debug.Log(mesh.triangles.Length + " " + mesh.vertices.Length + " " + mesh.GetIndexCount(0));
                 meshDataArray = Mesh.AcquireReadOnlyMeshData(mesh);
                 var meshData = meshDataArray[0];
                 if (SetSubMeshMatIndexs(meshC.convex == true ? 1 : mesh.subMeshCount) == false)
