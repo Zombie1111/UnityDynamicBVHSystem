@@ -33,7 +33,7 @@ namespace DyBVHSys_gameObjects
             DyBVHSys_core.HelpMethods.Debug_toggleTimer();
             for (int i = 0; i < cols.Count; i++)
             {
-                GameObjectBuilder.GameObjectData gOd = new(cols[i], null);
+                GameObjectBuilder.GameObjectData gOd = new(cols[i], null, out Mesh.MeshDataArray meshDataArray);
                 Test_BlasJob blasJob = new()
                 {
                     god = new(gOd, Allocator.TempJob),
@@ -43,7 +43,7 @@ namespace DyBVHSys_gameObjects
                 var handle = blasJob.Schedule();
                 handle.Complete();
 
-                gOd.Dispose();
+                gOd.Dispose(meshDataArray);
                 blasObjects[i] = blasJob.blas.Value;
                 blasJob.blas.Dispose();
                 blasJob.god.Dispose();

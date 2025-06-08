@@ -44,8 +44,8 @@ namespace DyBVHSys_core
             #region TlasScene build
             private readonly Node* nodes;
             private readonly int nodesLenght;
-            private readonly NativeArray<BLASInstance> blasInstances;
-            private readonly NativeArray<int> blasInstanceLocks;
+            private readonly BLASInstance* blasInstances;
+            private readonly int* blasInstanceLocks;
 
             /// <summary>
             /// Input nativeArrays MUST be Allocator.Persistent and never disposed unless the TLASScene is disposed simeultaneously
@@ -54,8 +54,8 @@ namespace DyBVHSys_core
             {
                 nodesLenght = activeBlasCount * 2;
                 var nodes = this.nodes = (Node*)UnsafeUtility.Malloc(nodesLenght * Node.SizeOf(), UnsafeUtility.AlignOf<Node>(), Allocator.Persistent);
-                this.blasInstances = blasInstances;
-                this.blasInstanceLocks = blasInstanceLocks;
+                this.blasInstances = (BLASInstance*)blasInstances.GetUnsafePtr();
+                this.blasInstanceLocks = (int*)blasInstances.GetUnsafePtr();
 
                 //Setup tlas nodes
                 NativeArray<short> nodeIndexs = new(activeBlasCount, Allocator.Temp);//nodeIdx

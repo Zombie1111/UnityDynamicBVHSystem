@@ -18,7 +18,7 @@ namespace DyBVHSys_gameObjects
         [BurstCompile]
         internal readonly struct GameObjectData
         {
-            internal unsafe GameObjectData(Collider col, MeshFilter mf)
+            internal unsafe GameObjectData(Collider col, MeshFilter mf, out MeshDataArray meshDataArray)
             {
                 subMeshMatI = new();
                 void* subMeshMatI_ptr = UnsafeUtility.AddressOf(ref subMeshMatI);
@@ -32,10 +32,10 @@ namespace DyBVHSys_gameObjects
                     Mesh mesh = mf.sharedMesh;
 
                     meshDataArray = Mesh.AcquireReadOnlyMeshData(mesh);
-                    var meshData = meshDataArray[0];
+                    meshData = meshDataArray[0];
                     if (SetSubMeshMatIndexs(mesh.subMeshCount) == false)
                     {
-                        type = ShapeType.Invalid;
+                        type = ShapeType.ConcaveMesh;
                         return;
                     }
                 }
@@ -48,10 +48,10 @@ namespace DyBVHSys_gameObjects
                     Mesh mesh = meshC.sharedMesh;
 
                     meshDataArray = Mesh.AcquireReadOnlyMeshData(mesh);
-                    var meshData = meshDataArray[0];
+                    meshData = meshDataArray[0];
                     if (SetSubMeshMatIndexs(meshC.convex == true ? 1 : mesh.subMeshCount) == false)
                     {
-                        type = ShapeType.Invalid;
+                        type = ShapeType.ConcaveMesh;
                         return;
                     }
                 }
@@ -79,7 +79,7 @@ namespace DyBVHSys_gameObjects
                 else
                 {
                     Debug.LogError(col.GetType() + " is not supported by the BVH builder!");
-                    offset = Vector3.zero; scale = Vector3.zero; type = ShapeType.Invalid; meshDataArray = new();
+                    offset = Vector3.zero; scale = Vector3.zero; type = ShapeType.Invalid; meshDataArray = new(); meshData = new();
                     return;
                 }
 
@@ -115,13 +115,13 @@ namespace DyBVHSys_gameObjects
                     id *= 31 + (int)Math.Round(scale.y * 1000);
                     id *= 31 + (int)Math.Round(scale.z * 1000);
                     id *= 31 + (int)type;
-                    if (type == ShapeType.ConcaveMesh || type == ShapeType.ConvexMesh) id *= 31 + meshDataArray[0].vertexCount;
+                    if (type == ShapeType.ConcaveMesh || type == ShapeType.ConvexMesh) id *= 31 + meshData.vertexCount;
                 }
 
                 return id;
             }
 
-            public void Dispose()
+            public void Dispose(MeshDataArray meshDataArray)
             {
                 meshDataArray.Dispose();
             }
@@ -132,7 +132,7 @@ namespace DyBVHSys_gameObjects
             /// </summary>
             internal readonly Vector3 scale;
             internal readonly ShapeType type;
-            internal readonly MeshDataArray meshDataArray;
+            internal readonly MeshData meshData;
             internal readonly FixedBytes16 subMeshMatI; internal const int _maxSubMeshes = 8;
         }
 
@@ -144,7 +144,7 @@ namespace DyBVHSys_gameObjects
             //}
 
             //Get mesh data and allocate native arrays
-            var meshData = god.meshDataArray[0];
+            var meshData = god.meshData;
             int subMeshCount = meshData.subMeshCount;
             int maxIndicesCount = 0;
             int totalIndicesCount = 0;
